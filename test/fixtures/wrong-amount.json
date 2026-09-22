@@ -1,0 +1,39 @@
+{
+  "_note": "Derived from synthetic-base: the transfer moves 0.5 USDC and the recipient's ATA ends with 500000, below the 1 USDC expected.",
+  "slot": 449300000,
+  "blockTime": 1790050000,
+  "version": 0,
+  "meta": {
+    "err": null,
+    "fee": 5000,
+    "preBalances": [],
+    "postBalances": [],
+    "preTokenBalances": [
+      { "accountIndex": 1, "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "owner": "89rvi3BkRLNd8K13sueSSHHguuNWLXsc44nqFdthfZhe", "programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "uiTokenAmount": { "amount": "2000000", "decimals": 6, "uiAmount": 2.0, "uiAmountString": "2" } }
+    ],
+    "postTokenBalances": [
+      { "accountIndex": 1, "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "owner": "89rvi3BkRLNd8K13sueSSHHguuNWLXsc44nqFdthfZhe", "programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "uiTokenAmount": { "amount": "2505703", "decimals": 6, "uiAmount": 2.505703, "uiAmountString": "2.505703" } },
+      { "accountIndex": 2, "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "owner": "EjHTsiLS7W8DD1WXXRz7yag7DKzkuZjGaJ12QdGRV6pd", "programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "uiTokenAmount": { "amount": "500000", "decimals": 6, "uiAmount": 0.5, "uiAmountString": "0.5" } }
+    ]
+  },
+  "transaction": {
+    "signatures": ["synthetic"],
+    "message": {
+      "recentBlockhash": "FfAFurWDFYafyiJLq6jex1ikMaGAuhFh62d8ECBu8go6",
+      "accountKeys": [
+        { "pubkey": "89rvi3BkRLNd8K13sueSSHHguuNWLXsc44nqFdthfZhe", "signer": true, "writable": true, "source": "transaction" },
+        { "pubkey": "9ySLCA1N1stqZVaJL4BvmX8i6mwFvUkutwNvxCocJQdk", "signer": false, "writable": true, "source": "transaction" },
+        { "pubkey": "FLmrXmPivZ5HjAGBkhS9jHdkkq6qw18nfy3ez4mHVkj3", "signer": false, "writable": true, "source": "transaction" },
+        { "pubkey": "EjHTsiLS7W8DD1WXXRz7yag7DKzkuZjGaJ12QdGRV6pd", "signer": false, "writable": false, "source": "transaction" },
+        { "pubkey": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "signer": false, "writable": false, "source": "transaction" },
+        { "pubkey": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "signer": false, "writable": false, "source": "transaction" },
+        { "pubkey": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", "signer": false, "writable": false, "source": "transaction" },
+        { "pubkey": "9ddDHtiq8TrFxWGjDpoNEyqgDuVM1WN6j2G4kWmRd27Z", "signer": false, "writable": false, "source": "transaction" }
+      ],
+      "instructions": [
+        { "programId": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", "accounts": ["89rvi3BkRLNd8K13sueSSHHguuNWLXsc44nqFdthfZhe", "9ySLCA1N1stqZVaJL4BvmX8i6mwFvUkutwNvxCocJQdk"], "data": "synthetic" },
+        { "program": "spl-token", "programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "parsed": { "type": "transferChecked", "info": { "source": "9ySLCA1N1stqZVaJL4BvmX8i6mwFvUkutwNvxCocJQdk", "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "destination": "FLmrXmPivZ5HjAGBkhS9jHdkkq6qw18nfy3ez4mHVkj3", "multisigAuthority": "89rvi3BkRLNd8K13sueSSHHguuNWLXsc44nqFdthfZhe", "signers": ["9ddDHtiq8TrFxWGjDpoNEyqgDuVM1WN6j2G4kWmRd27Z"], "tokenAmount": { "amount": "500000", "decimals": 6, "uiAmount": 0.5, "uiAmountString": "0.5" } } } }
+      ]
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "_note": "Synthetic control in the getParsedTransaction shape, not a recorded payment. Keys are a synthetic payer (a generated public key whose secret was discarded), a fresh recipient and reference, and their derived USDC ATAs. The reference sits under the token parser's extra-account field; the recorded fixture from the first real payment replaces this file's role as the passing case.",
+  "slot": 449300000,
+  "blockTime": 1790050000,
+  "version": 0,
+  "meta": {
+    "err": null,
+    "fee": 5000,
+    "computeUnitsConsumed": 94809,
+    "preBalances": [],
+    "postBalances": [],
+    "logMessages": [],
+    "preTokenBalances": [
+      { "accountIndex": 1, "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "owner": "89rvi3BkRLNd8K13sueSSHHguuNWLXsc44nqFdthfZhe", "programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "uiTokenAmount": { "amount": "2000000", "decimals": 6, "uiAmount": 2.0, "uiAmountString": "2" } }
+    ],
+    "postTokenBalances": [
+      { "accountIndex": 1, "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "owner": "89rvi3BkRLNd8K13sueSSHHguuNWLXsc44nqFdthfZhe", "programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "uiTokenAmount": { "amount": "2005703", "decimals": 6, "uiAmount": 2.005703, "uiAmountString": "2.005703" } },
+      { "accountIndex": 2, "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "owner": "EjHTsiLS7W8DD1WXXRz7yag7DKzkuZjGaJ12QdGRV6pd", "programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "uiTokenAmount": { "amount": "1000000", "decimals": 6, "uiAmount": 1.0, "uiAmountString": "1" } }
+    ]
+  },
+  "transaction": {
+    "signatures": ["synthetic"],
+    "message": {
+      "recentBlockhash": "FfAFurWDFYafyiJLq6jex1ikMaGAuhFh62d8ECBu8go6",
+      "accountKeys": [
+        { "pubkey": "89rvi3BkRLNd8K13sueSSHHguuNWLXsc44nqFdthfZhe", "signer": true, "writable": true, "source": "transaction" },
+        { "pubkey": "9ySLCA1N1stqZVaJL4BvmX8i6mwFvUkutwNvxCocJQdk", "signer": false, "writable": true, "source": "transaction" },
+        { "pubkey": "FLmrXmPivZ5HjAGBkhS9jHdkkq6qw18nfy3ez4mHVkj3", "signer": false, "writable": true, "source": "transaction" },
+        { "pubkey": "EjHTsiLS7W8DD1WXXRz7yag7DKzkuZjGaJ12QdGRV6pd", "signer": false, "writable": false, "source": "transaction" },
+        { "pubkey": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "signer": false, "writable": false, "source": "transaction" },
+        { "pubkey": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "signer": false, "writable": false, "source": "transaction" },
+        { "pubkey": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL", "signer": false, "writable": false, "source": "transaction" },
+        { "pubkey": "ComputeBudget111111111111111111111111111111", "signer": false, "writable": false, "source": "transaction" },
+        { "pubkey": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", "signer": false, "writable": false, "source": "transaction" },
+        { "pubkey": "9ddDHtiq8TrFxWGjDpoNEyqgDuVM1WN6j2G4kWmRd27Z", "signer": false, "writable": false, "source": "transaction" }
+      ],
+      "instructions": [
+        { "programId": "ComputeBudget111111111111111111111111111111", "accounts": [], "data": "3gJqkocMWaMm" },
+        { "programId": "ComputeBudget111111111111111111111111111111", "accounts": [], "data": "HY1Z3ubCLkc" },
+        { "programId": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", "accounts": ["89rvi3BkRLNd8K13sueSSHHguuNWLXsc44nqFdthfZhe", "9ySLCA1N1stqZVaJL4BvmX8i6mwFvUkutwNvxCocJQdk"], "data": "synthetic" },
+        { "program": "spl-associated-token-account", "programId": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL", "parsed": { "type": "createIdempotent", "info": { "account": "FLmrXmPivZ5HjAGBkhS9jHdkkq6qw18nfy3ez4mHVkj3", "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "source": "89rvi3BkRLNd8K13sueSSHHguuNWLXsc44nqFdthfZhe", "systemProgram": "11111111111111111111111111111111", "tokenProgram": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "wallet": "EjHTsiLS7W8DD1WXXRz7yag7DKzkuZjGaJ12QdGRV6pd" } } },
+        { "program": "spl-token", "programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "parsed": { "type": "transferChecked", "info": { "source": "9ySLCA1N1stqZVaJL4BvmX8i6mwFvUkutwNvxCocJQdk", "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "destination": "FLmrXmPivZ5HjAGBkhS9jHdkkq6qw18nfy3ez4mHVkj3", "multisigAuthority": "89rvi3BkRLNd8K13sueSSHHguuNWLXsc44nqFdthfZhe", "signers": ["9ddDHtiq8TrFxWGjDpoNEyqgDuVM1WN6j2G4kWmRd27Z"], "tokenAmount": { "amount": "1000000", "decimals": 6, "uiAmount": 1.0, "uiAmountString": "1" } } } }
+      ]
+    }
+  }
+}
