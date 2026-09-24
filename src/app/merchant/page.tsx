@@ -38,12 +38,13 @@ import {
   type WatchState,
 } from '../../lib/merchant-watch';
 import { buildRequestUrl, buildScanLink } from '../../lib/pay-url';
+import { PAY_ENABLED } from '../../lib/site';
 import { drawUniqueStep, uniqueAmount } from '../../lib/unique-amount';
 import { parseAmountUsdc, parseWalletAddress, ValidationError } from '../../lib/validate';
 
 // Watching as built: both paths every 3 s for 10 minutes, then every 30 s for as long as the page
 // is open; a transfer request has no deadline, so it is never declared unpaid or expired.
-const UNIQUE_TEXT = 'Includes a few millionths so this payment can be recognised.';
+const UNIQUE_TEXT = "A few millionths of a USDC are added so the payment can be matched even if a wallet drops the request's reference.";
 const NETWORK_BUSY = 'network busy, try again';
 const explorer = (sig: string) => `https://explorer.solana.com/tx/${sig}`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -95,7 +96,7 @@ function MerchantPage() {
       const href = buildRequestUrl(recipient, text, reference);
       setRequest({ recipient, recipientAta, amountText: text, amountUsdc, reference, url: href, createdAt: Date.now() });
       setQr(await QRCode.toDataURL(href, { width: 320, margin: 1 }));
-      setScanQr(await QRCode.toDataURL(buildScanLink(window.location.origin, href), { width: 320, margin: 1 }));
+      if (PAY_ENABLED) setScanQr(await QRCode.toDataURL(buildScanLink(window.location.origin, href), { width: 320, margin: 1 }));
       setStatus('waiting for payment');
     } catch (e) {
       setError(e instanceof ValidationError ? e.reason : 'could not create the request');
@@ -206,7 +207,7 @@ function MerchantPage() {
       <h1>Merchant</h1>
       <p>Create a USDC payment request; the payer settles it from stock holdings in one transaction when it fits, or two.</p>
       <label>
-        Recipient address
+        Your wallet address
         <input value={addressText} onChange={(e) => setAddressText(e.target.value)} style={{ width: '100%' }} />
       </label>
       <label>
@@ -224,23 +225,34 @@ function MerchantPage() {
           <p>
             Amount to pay: {request.amountText} USDC. {UNIQUE_TEXT}
           </p>
-          {qr && <img src={qr} alt="Solana Pay QR" width={320} height={320} />}
-          <p style={{ wordBreak: 'break-all', fontSize: 12 }}>{request.url}</p>
+          {!paid && (
+            <>
+              {qr && <img src={qr} alt="Solana Pay QR" width={320} height={320} />}
+              <p style={{ fontSize: '1.5rem', fontWeight: 600 }}>Pay exactly {request.amountText} USDC</p>
+              <p>
+                Send USDC, not another token. If your wallet asks for the amount, enter it in full, millionths included. A different
+                amount or token still reaches this wallet but isn&apos;t shown as Paid here.
+              </p>
+              <p style={{ wordBreak: 'break-all', fontSize: 12 }}>{request.url}</p>
+            </>
+          )}
           <p>Reference: {request.reference.toBase58()}</p>
-          {scanQr && (
+          {PAY_ENABLED && !paid && scanQr && (
             <>
               <img src={scanQr} alt="Scan to pay QR" width={320} height={320} />
               <p>Scan with your phone camera to pay from stock in Phantom</p>
             </>
           )}
           {paid ? (
-            <p style={{ color: 'green' }}>
-              Paid{' '}
-              <a href={explorer(paid.signature)} target="_blank" rel="noreferrer">
-                {paid.signature}
-              </a>{' '}
-              ({paid.foundBy === 'reference' ? 'found by reference' : 'found by amount'})
-            </p>
+            <>
+              <p style={{ color: 'green' }}>
+                {paid.foundBy === 'reference' ? 'Paid, matched by reference' : 'Paid, matched by exact USDC amount'}{' '}
+                <a href={explorer(paid.signature)} target="_blank" rel="noreferrer">
+                  {paid.signature}
+                </a>
+              </p>
+              <p>This request is paid. Create a new request for another payment.</p>
+            </>
           ) : (
             <p>{status}</p>
           )}

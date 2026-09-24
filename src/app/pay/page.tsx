@@ -29,6 +29,7 @@ import { buildReceipt, type Receipt, type ReceiptTransaction } from '../../lib/r
 import { evaluateReference, REFERENCE_LOOKUP_LIMIT, successfulSignatures, type ReferenceCheck, type ReferenceEntry, type VerifyOutcome } from '../../lib/reference-check';
 import { adjustedMaxLoss, checkReturned } from '../../lib/returned-check';
 import { base64ToBytes, checkSimulation, isPayerTokenAccount, type CheckedAccount } from '../../lib/simulation-check';
+import { PAY_ENABLED, REPO_URL } from '../../lib/site';
 import { formatSol, transactionCost, transactionFee } from '../../lib/sol-budget';
 import { parseAmountUsdc, parseWalletAddress, ValidationError } from '../../lib/validate';
 
@@ -978,7 +979,24 @@ function PayPage() {
   );
 }
 
+// Shown while paying is switched off: no wallet, no quote, nothing read from chain.
+function PayDisabled() {
+  return (
+    <main style={{ maxWidth: 640, margin: '2rem auto', padding: '0 1rem', fontFamily: 'system-ui, sans-serif' }}>
+      <h1>Pay</h1>
+      <p>
+        Paying from stock is switched off on this public demo. The payment log in the{' '}
+        <a href={REPO_URL} target="_blank" rel="noreferrer" style={{ textDecoration: 'underline' }}>
+          README
+        </a>{' '}
+        links real mainnet payments we made.
+      </p>
+    </main>
+  );
+}
+
 export default function Page() {
+  if (!PAY_ENABLED) return <PayDisabled />;
   return (
     <Providers>
       <PayPage />
