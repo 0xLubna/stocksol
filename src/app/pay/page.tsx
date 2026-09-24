@@ -7,12 +7,27 @@ import { Keypair, PublicKey, SendTransactionError, VersionedTransaction, type Ac
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import Providers from '../providers';
 import { payableHoldings, USDC, type RegistryEntry } from '../../registry';
+import { isSigner, matchAmount } from '../../lib/amount-match';
 import { encodeBase58 } from '../../lib/base58';
 import { checkPayment, type CheckResult } from '../../lib/check-payment';
 import { currentMultiplier, formatScaled, type ScaledUiAmountConfig } from '../../lib/display';
+import {
+  candidatesOf,
+  evaluateHistory,
+  historyRequest,
+  HISTORY_MAX_READS,
+  HISTORY_PAGE_LIMIT,
+  HISTORY_UNAVAILABLE,
+  needsHistoryCheck,
+  pageReachesEdge,
+  type HistoryCheck,
+  type HistoryEntry,
+  type HistoryRead,
+} from '../../lib/paid-history';
 import { readPayUrl } from '../../lib/pay-url';
 import { buildReceipt, type Receipt, type ReceiptTransaction } from '../../lib/receipt';
 import { evaluateReference, REFERENCE_LOOKUP_LIMIT, successfulSignatures, type ReferenceCheck, type ReferenceEntry, type VerifyOutcome } from '../../lib/reference-check';
+import { adjustedMaxLoss, checkReturned } from '../../lib/returned-check';
 import { base64ToBytes, checkSimulation, isPayerTokenAccount, type CheckedAccount } from '../../lib/simulation-check';
 import { formatSol, transactionCost, transactionFee } from '../../lib/sol-budget';
 import { parseAmountUsdc, parseWalletAddress, ValidationError } from '../../lib/validate';
@@ -50,7 +65,7 @@ const TEXT = {
   stuckSale: 'The sale is not confirmed yet and nothing was paid. Do not start a new payment until the explorer shows this signature as failed, or still cannot find it a few minutes from now.',
 } as const;
 
-type Target = { recipient: PublicKey; amountUsdc: bigint; amountText: string; reference: PublicKey; label: string | null };
+type Target = { recipient: PublicKey; amountUsdc: bigint; amountText: string; reference: PublicKey; label: string | null; fromLink: boolean };
 
 type Quote = {
   target: Target;
@@ -65,6 +80,8 @@ type Quote = {
   otherAmountThreshold: bigint;
   lamportsRequired: bigint;
   reserveLamports: bigint;
+  /** The newest signature the quote-time history check saw; the pre-sign run reads only newer ones. */
+  historyUntil: string | null;
   /** The payment check, then the simulation check; the first refusal wins. */
   check: CheckResult;
 };
@@ -77,6 +94,17 @@ type Stage = 'swap' | 'payment';
 type Pending = { stage: Stage; signature: string; split: boolean; signedPayment: VersionedTransaction | null; saleSignature: string | null };
 type Outcome = { text: string; signature: string | null; extra?: string };
 type Status = 'confirmed' | 'failed' | 'pending';
+type SimulationInput = {
+  transactions: VersionedTransaction[];
+  lookupTables: AddressLookupTableAccount[];
+  holding: RegistryEntry;
+  single: boolean;
+  inAmount: bigint;
+  otherAmountThreshold: bigint;
+  amountUsdc: bigint;
+  maxLamportsLoss: bigint;
+  paymentFee: bigint;
+};
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const explorer = (sig: string) => `https://explorer.solana.com/tx/${sig}`;
@@ -196,6 +224,7 @@ function PayPage() {
         amountText: read.request.amountText,
         reference: read.request.reference ?? Keypair.generate().publicKey,
         label: read.request.label,
+        fromLink: true,
       };
     }
     return {
@@ -204,6 +233,7 @@ function PayPage() {
       amountText: amountText.trim(),
       reference: Keypair.generate().publicKey,
       label: null,
+      fromLink: false,
     };
   };
 
@@ -236,6 +266,52 @@ function PayPage() {
     return evaluateReference(entries, outcomes);
   };
 
+  // Has this wallet already paid this link without the reference? The payer's USDC account
+  // history of the last 24 hours, paged newest first, every candidate read; never skipped.
+  const historyCheck = async (t: Target, payerKey: PublicKey, until: string | null): Promise<{ check: HistoryCheck; newest: string | null }> => {
+    const payerAta = getAssociatedTokenAddressSync(new PublicKey(USDC.mint), payerKey, false, TOKEN_PROGRAM_ID);
+    const recipientAta = getAssociatedTokenAddressSync(new PublicKey(USDC.mint), t.recipient, false, TOKEN_PROGRAM_ID).toBase58();
+    const now = Math.floor(Date.now() / 1000);
+    const candidates: string[] = [];
+    let newest: string | null = null;
+    let before: string | null = null;
+    let reachedEdge = false;
+    try {
+      for (;;) {
+        const request = historyRequest(until, before);
+        const entries: HistoryEntry[] = await connection.getSignaturesForAddress(
+          payerAta,
+          { limit: HISTORY_PAGE_LIMIT, until: request.until ?? undefined, before: request.before ?? undefined },
+          'confirmed',
+        );
+        if (newest === null && entries.length > 0) newest = entries[0].signature;
+        candidates.push(...candidatesOf(entries, now));
+        if (pageReachesEdge(entries, now)) {
+          reachedEdge = true;
+          break;
+        }
+        if (candidates.length > HISTORY_MAX_READS) break;
+        before = entries[entries.length - 1].signature;
+      }
+    } catch {
+      return { check: { status: 'incomplete' }, newest };
+    }
+    const reads = new Map<string, HistoryRead>();
+    for (const signature of candidates.slice(0, HISTORY_MAX_READS)) {
+      try {
+        const tx = await connection.getParsedTransaction(signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
+        if (!tx) reads.set(signature, { kind: 'missing' });
+        else {
+          const matched = isSigner(tx, payerKey.toBase58()) && matchAmount(tx, { recipient: t.recipient.toBase58(), recipientAta, usdcMint: USDC.mint, amountUsdc: t.amountUsdc }).ok;
+          reads.set(signature, { kind: matched ? 'matched' : 'unmatched' });
+        }
+      } catch {
+        reads.set(signature, { kind: 'threw' });
+      }
+    }
+    return { check: evaluateHistory(candidates, reads, reachedEdge && candidates.length <= HISTORY_MAX_READS), newest };
+  };
+
   // Shows a reference refusal or an incomplete check; returns whether the flow may go on.
   const applyReferenceCheck = (r: ReferenceCheck): boolean => {
     if (r.status === 'clear') return true;
@@ -248,12 +324,23 @@ function PayPage() {
     return false;
   };
 
+  const applyHistoryCheck = (r: HistoryCheck): boolean => {
+    if (r.status === 'clear') return true;
+    if (r.status === 'refused') {
+      setError(r.reason);
+      setRefusedSignature(r.signature);
+    } else {
+      setError(HISTORY_UNAVAILABLE);
+    }
+    return false;
+  };
+
   // The simulated-balance check on the swap-carrying transaction; the reads go through /api/rpc.
   // Returns null when a read or the simulation could not be done.
-  const simulationCheck = async (q: Omit<Quote, 'check'>, payerKey: PublicKey): Promise<CheckResult | null> => {
+  const simulationCheck = async (s: SimulationInput, payerKey: PublicKey): Promise<CheckResult | null> => {
     try {
-      const tx = q.transactions[0];
-      const keys = tx.message.getAccountKeys({ addressLookupTableAccounts: q.lookupTables });
+      const tx = s.transactions[0];
+      const keys = tx.message.getAccountKeys({ addressLookupTableAccounts: s.lookupTables });
       const payerUsdc = getAssociatedTokenAddressSync(new PublicKey(USDC.mint), payerKey, false, TOKEN_PROGRAM_ID);
       const seen = new Set<string>([payerKey.toBase58()]);
       const toRead: PublicKey[] = [payerKey];
@@ -291,26 +378,39 @@ function PayPage() {
         const r = returned[i + 1];
         return { address: c.address.toBase58(), pre: c.pre, post: r ? base64ToBytes(r.data[0]) : null };
       });
-      const paymentFee = q.single ? BigInt(0) : transactionFee(transactionCost(q.transactions[1]));
       return checkSimulation({
         err: sim.value.err,
         payerPreLamports: payerPre,
         payerPostLamports: returned[0] ? BigInt(returned[0].lamports) : null,
         accounts,
         payer,
-        holdingMint: q.holding.mint,
+        holdingMint: s.holding.mint,
         usdcMint: USDC.mint,
         payerUsdcAccount: payerUsdc.toBase58(),
-        inAmount: q.inAmount,
-        otherAmountThreshold: q.otherAmountThreshold,
-        amountUsdc: q.target.amountUsdc,
-        single: q.single,
-        maxLamportsLoss: q.lamportsRequired - q.reserveLamports,
-        paymentFee,
+        inAmount: s.inAmount,
+        otherAmountThreshold: s.otherAmountThreshold,
+        amountUsdc: s.amountUsdc,
+        single: s.single,
+        maxLamportsLoss: s.maxLamportsLoss,
+        paymentFee: s.paymentFee,
       });
     } catch {
       return null;
     }
+  };
+
+  // Lookup tables named by transactions, from chain through /api/rpc; `have` is reused.
+  const resolveTables = async (transactions: VersionedTransaction[], have: AddressLookupTableAccount[]): Promise<AddressLookupTableAccount[]> => {
+    const known = new Map(have.map((t) => [t.key.toBase58(), t]));
+    for (const tx of transactions) {
+      for (const lookup of tx.message.addressTableLookups) {
+        const key = lookup.accountKey.toBase58();
+        if (known.has(key)) continue;
+        const table = await connection.getAddressLookupTable(lookup.accountKey);
+        if (table.value) known.set(key, table.value);
+      }
+    }
+    return [...known.values()];
   };
 
   const getQuote = async () => {
@@ -338,6 +438,12 @@ function PayPage() {
         return;
       }
       if (!applyReferenceCheck(await referenceCheck(t))) return;
+      let historyUntil: string | null = null;
+      if (needsHistoryCheck(t)) {
+        const history = await historyCheck(t, publicKey, null);
+        if (!applyHistoryCheck(history.check)) return;
+        historyUntil = history.newest;
+      }
 
       let res: Response;
       try {
@@ -376,15 +482,7 @@ function PayPage() {
         const body = await res.json();
         const transactions = (body.transactions as string[]).map((b64) => VersionedTransaction.deserialize(base64ToBytes(b64)));
         // Lookup tables come from chain through /api/rpc, never from the /api/pay response.
-        const tableKeys = new Map<string, PublicKey>();
-        for (const tx of transactions) {
-          for (const lookup of tx.message.addressTableLookups) tableKeys.set(lookup.accountKey.toBase58(), lookup.accountKey);
-        }
-        const lookupTables: AddressLookupTableAccount[] = [];
-        for (const key of tableKeys.values()) {
-          const table = await connection.getAddressLookupTable(key);
-          if (table.value) lookupTables.push(table.value);
-        }
+        const lookupTables = await resolveTables(transactions, []);
         paymentCheck = checkPayment({ transactions, lookupTables, payer: publicKey, recipient: t.recipient, amountUsdc: t.amountUsdc, reference: t.reference });
         built = {
           target: t,
@@ -399,6 +497,7 @@ function PayPage() {
           otherAmountThreshold: BigInt(body.otherAmountThreshold),
           lamportsRequired: BigInt(body.lamportsRequired),
           reserveLamports: BigInt(body.lamportsBreakdown.reserve),
+          historyUntil,
         };
       } catch {
         setError(TEXT.networkBusy);
@@ -406,7 +505,20 @@ function PayPage() {
       }
       let check = paymentCheck;
       if (check.ok) {
-        const simulated = await simulationCheck(built, publicKey);
+        const simulated = await simulationCheck(
+          {
+            transactions: built.transactions,
+            lookupTables: built.lookupTables,
+            holding: built.holding,
+            single: built.single,
+            inAmount: built.inAmount,
+            otherAmountThreshold: built.otherAmountThreshold,
+            amountUsdc: t.amountUsdc,
+            maxLamportsLoss: built.lamportsRequired - built.reserveLamports,
+            paymentFee: built.single ? BigInt(0) : transactionFee(transactionCost(built.transactions[1])),
+          },
+          publicKey,
+        );
         if (simulated === null) {
           setError(TEXT.networkBusy);
           return;
@@ -593,7 +705,7 @@ function PayPage() {
     setRefusedSignature(null);
     try {
       const q = quote;
-      // The reference is checked again right before the wallet is asked.
+      // The reference and the wallet's history are checked again right before the wallet is asked.
       const ref = await referenceCheck(q.target);
       if (ref.status === 'refused') {
         applyReferenceCheck(ref);
@@ -605,6 +717,19 @@ function PayPage() {
         setError(TEXT.networkBusy);
         return;
       }
+      if (needsHistoryCheck(q.target)) {
+        const history = await historyCheck(q.target, publicKey, q.historyUntil);
+        if (history.check.status === 'refused') {
+          applyHistoryCheck(history.check);
+          setQuote(null);
+          setPhase('idle');
+          return;
+        }
+        if (history.check.status === 'incomplete') {
+          setError(HISTORY_UNAVAILABLE);
+          return;
+        }
+      }
       let signed: VersionedTransaction[];
       try {
         signed = q.transactions.length === 1 ? [await signTransaction(q.transactions[0])] : await signAllTransactions(q.transactions);
@@ -612,18 +737,50 @@ function PayPage() {
         setError(TEXT.notSigned);
         return;
       }
-      // What the wallet returned is checked again before anything is sent.
+      // From here on the pay button never re-enables for this quote.
+      setPhase('inflight');
+      // What the wallet returned is checked again before anything is sent: any lookup table it
+      // names is resolved from chain, the payment check runs with trailing Lighthouse allowed, the
+      // returned instructions must match the checked ones, and the swap is simulated again.
+      let tables: AddressLookupTableAccount[];
+      try {
+        tables = await resolveTables(signed, q.lookupTables);
+      } catch {
+        end({ text: TEXT.notSent, signature: null, extra: TEXT.networkBusy });
+        return;
+      }
       signed.forEach((s, i) => {
         if (!sameBytes(s.message.serialize(), q.transactions[i].message.serialize())) note(TEXT.walletChanged);
       });
-      const signedCheck = checkPayment({ transactions: signed, lookupTables: q.lookupTables, payer: publicKey, recipient: q.target.recipient, amountUsdc: q.target.amountUsdc, reference: q.target.reference });
-      // From here on the pay button never re-enables for this quote.
-      setPhase('inflight');
-      if (!signedCheck.ok) {
-        end({ text: TEXT.notSent, signature: null, extra: signedCheck.reason });
+      const returned = checkReturned({ checked: q.transactions, returned: signed, lookupTables: tables, payer: publicKey, recipient: q.target.recipient, amountUsdc: q.target.amountUsdc, reference: q.target.reference });
+      returned.log.forEach(note);
+      if (!returned.ok) {
+        end({ text: TEXT.notSent, signature: null, extra: returned.reason });
         return;
       }
       const split = !q.single;
+      const resimulated = await simulationCheck(
+        {
+          transactions: signed,
+          lookupTables: tables,
+          holding: q.holding,
+          single: q.single,
+          inAmount: q.inAmount,
+          otherAmountThreshold: q.otherAmountThreshold,
+          amountUsdc: q.target.amountUsdc,
+          maxLamportsLoss: adjustedMaxLoss(q.lamportsRequired - q.reserveLamports, returned.fees[0].checked, returned.fees[0].returned),
+          paymentFee: split ? returned.fees[1].returned : BigInt(0),
+        },
+        publicKey,
+      );
+      if (resimulated === null) {
+        end({ text: TEXT.notSent, signature: null, extra: TEXT.networkBusy });
+        return;
+      }
+      if (!resimulated.ok) {
+        end({ text: TEXT.notSent, signature: null, extra: resimulated.reason });
+        return;
+      }
       const signature = await sendOnce(signed[0]);
       if (signature === null) {
         end({ text: TEXT.notSent, signature: null });

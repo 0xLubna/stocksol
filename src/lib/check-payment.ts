@@ -1,9 +1,9 @@
 // The pay page's own check of every transaction it is asked to sign, run before the wallet is
-// asked and again on what the wallet returns. Pure: takes deserialized transactions and lookup
+// asked and again on what the wallet returned. Pure: takes deserialized transactions and lookup
 // tables the page resolved from chain through /api/rpc, never anything /api/pay said about itself.
 
 import { PublicKey } from '@solana/web3.js';
-import type { AddressLookupTableAccount, MessageAccountKeys, VersionedTransaction } from '@solana/web3.js';
+import type { AddressLookupTableAccount, MessageAccountKeys, MessageCompiledInstruction, VersionedTransaction } from '@solana/web3.js';
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
@@ -11,6 +11,7 @@ import {
   TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
 import { USDC } from '../registry';
+import { LIGHTHOUSE_PROGRAM_ID } from './lighthouse';
 
 /** Jupiter's swap program: the swap instruction's programId in the step 4 and step 5 reads. */
 export const JUPITER_PROGRAM_ID = 'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4';
@@ -33,6 +34,11 @@ export type CheckInput = {
   reference: PublicKey;
 };
 
+export type CheckOptions = {
+  /** Post-sign only: Lighthouse instructions at the end of a transaction are set aside first. */
+  allowTrailingLighthouse?: boolean;
+};
+
 export type CheckResult = { ok: true } | { ok: false; reason: string };
 
 function fail(reason: string): CheckResult {
@@ -44,7 +50,17 @@ function isAtaCreate(data: Uint8Array): boolean {
   return data.length === 0 || (data.length === 1 && data[0] === 1);
 }
 
-export function checkPayment(input: CheckInput): CheckResult {
+/** How many instructions at the end of the list belong to Lighthouse. */
+export function trailingLighthouseCount(keys: MessageAccountKeys, instructions: MessageCompiledInstruction[]): number {
+  let count = 0;
+  for (let i = instructions.length - 1; i >= 0; i -= 1) {
+    if (keys.get(instructions[i].programIdIndex)?.toBase58() !== LIGHTHOUSE_PROGRAM_ID) break;
+    count += 1;
+  }
+  return count;
+}
+
+export function checkPayment(input: CheckInput, options: CheckOptions = {}): CheckResult {
   if (input.transactions.length === 0) return fail('no transactions');
   const usdcMint = new PublicKey(USDC.mint);
   const payer = input.payer.toBase58();
@@ -53,21 +69,27 @@ export function checkPayment(input: CheckInput): CheckResult {
   const recipientAta = getAssociatedTokenAddressSync(usdcMint, input.recipient, false, TOKEN_PROGRAM_ID).toBase58();
 
   const resolved: MessageAccountKeys[] = [];
+  const lists: MessageCompiledInstruction[][] = [];
   for (const tx of input.transactions) {
     const statics = tx.message.staticAccountKeys;
     if (statics.length === 0 || statics[0].toBase58() !== payer) return fail('fee payer is not the payer');
+    let keys: MessageAccountKeys;
     try {
-      resolved.push(tx.message.getAccountKeys({ addressLookupTableAccounts: input.lookupTables }));
+      keys = tx.message.getAccountKeys({ addressLookupTableAccounts: input.lookupTables });
     } catch {
       return fail('lookup tables not resolved');
     }
+    resolved.push(keys);
+    const all = tx.message.compiledInstructions;
+    const trailing = options.allowTrailingLighthouse ? trailingLighthouseCount(keys, all) : 0;
+    lists.push(all.slice(0, all.length - trailing));
   }
 
-  // The payment transaction is the last one; its last instruction is the transfer.
+  // The payment transaction is the last one; its last remaining instruction is the transfer.
   const last = input.transactions.length - 1;
   const paymentTx = input.transactions[last];
   const paymentKeys = resolved[last];
-  const paymentIxs = paymentTx.message.compiledInstructions;
+  const paymentIxs = lists[last];
   if (paymentIxs.length === 0) return fail('payment transaction has no instructions');
   const transfer = paymentIxs[paymentIxs.length - 1];
   if (paymentKeys.get(transfer.programIdIndex)?.toBase58() !== TOKEN_PROGRAM) {
@@ -93,7 +115,7 @@ export function checkPayment(input: CheckInput): CheckResult {
   const expectedCreateKeys = [payer, recipientAta, recipient, usdcMint.toBase58(), SYSTEM_PROGRAM_ID, TOKEN_PROGRAM];
   for (let t = 0; t <= last; t += 1) {
     const keys = resolved[t];
-    const ixs = input.transactions[t].message.compiledInstructions;
+    const ixs = lists[t];
     const isSplitPayment = last > 0 && t === last;
     let creates = 0;
     for (let i = 0; i < ixs.length; i += 1) {

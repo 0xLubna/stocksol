@@ -1,10 +1,10 @@
-// Tests for src/lib/merchant-watch.ts. Run: pnpm test
+// Tests for the reference path and the keyed store of src/lib/merchant-watch.ts. Run: pnpm test
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadTs } from './load-ts.mjs';
 
-const { selectToVerify, applyOutcome, initialWatch, MERCHANT_VERIFY_PER_POLL, newWatch, watchFor, storeWatch, isCurrent } = loadTs('src/lib/merchant-watch.ts');
+const { selectToVerify, applyOutcome, initialWatch, MERCHANT_VERIFY_PER_POLL, newWatch, watchFor, storeWatch, isCurrent, skipSet } = loadTs('src/lib/merchant-watch.ts');
 
 const ok = (sig) => ({ signature: sig, err: null });
 const failed = (sig) => ({ signature: sig, err: { InstructionError: [0, 'Custom'] } });
@@ -24,9 +24,11 @@ test('keeps the lookup order (newest first) and stops at the per-poll limit', ()
   assert.deepEqual(picked, ['s0', 's1', 's2', 's3', 's4']);
 });
 
-test('200 ok true pays', () => {
+test('200 ok true pays by reference and marks the signature checked', () => {
   const next = applyOutcome(initialWatch, 'a', { kind: 'response', status: 200, ok: true });
   assert.equal(next.paid, 'a');
+  assert.equal(next.foundBy, 'reference');
+  assert.ok(next.checked.has('a'));
 });
 
 test('200 ok false is remembered, skipped from then on, and flags a mismatch', () => {
@@ -34,14 +36,16 @@ test('200 ok false is remembered, skipped from then on, and flags a mismatch', (
   assert.equal(next.paid, null);
   assert.equal(next.mismatch, true);
   assert.ok(next.rejected.has('a'));
-  assert.deepEqual(selectToVerify([ok('a'), ok('b')], next.rejected), ['b']);
+  assert.ok(next.checked.has('a'));
+  assert.deepEqual(selectToVerify([ok('a'), ok('b')], skipSet(next)), ['b']);
   assert.equal(initialWatch.rejected.size, 0);
+  assert.equal(initialWatch.checked.size, 0);
 });
 
 test('a throw or a non-200 answer changes nothing, so it is retried next poll', () => {
   assert.equal(applyOutcome(initialWatch, 'a', { kind: 'threw' }), initialWatch);
   assert.equal(applyOutcome(initialWatch, 'a', { kind: 'response', status: 404, ok: false }), initialWatch);
-  assert.deepEqual(selectToVerify([ok('a')], initialWatch.rejected), ['a']);
+  assert.deepEqual(selectToVerify([ok('a')], skipSet(initialWatch)), ['a']);
 });
 
 const paidState = (sig) => applyOutcome(initialWatch, sig, { kind: 'response', status: 200, ok: true });
@@ -62,13 +66,16 @@ test("a matching round's write is kept", () => {
   assert.equal(watchFor(after, 'refA').paid, 'sig');
 });
 
-test('a new request starts from nothing', () => {
+test('a new request starts from nothing, with its own boundary', () => {
   const old = storeWatch(newWatch('refA'), 'refA', applyOutcome(initialWatch, 'x', { kind: 'response', status: 200, ok: false }));
   assert.ok(old.state.rejected.has('x'));
   assert.equal(watchFor(old, 'refB'), initialWatch);
-  const fresh = newWatch('refB');
-  assert.equal(fresh.state, initialWatch);
+  const fresh = newWatch('refB', 'boundarySig');
+  assert.equal(fresh.state.paid, null);
   assert.equal(fresh.state.rejected.size, 0);
+  assert.equal(fresh.state.checked.size, 0);
+  assert.deepEqual(fresh.state.amount.queue, []);
+  assert.equal(fresh.state.amount.boundary, 'boundarySig');
   assert.equal(storeWatch(null, 'refB', paidState('sig')), null);
   assert.equal(watchFor(null, 'refB'), initialWatch);
 });
@@ -82,4 +89,3 @@ test('isCurrent: true for the stored reference, false for another, false with no
   assert.equal(isCurrent(second, 'refA'), false);
   assert.equal(isCurrent(second, 'refB'), true);
 });
-

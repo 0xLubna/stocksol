@@ -48,3 +48,18 @@ test('control fails for a larger amount', () => {
   const result = verifyPayment(fixture('synthetic-base'), { ...expected, amountUsdc: 1000001n });
   assert.deepEqual(result, { ok: false, reason: 'recipient received less than the amount' });
 });
+
+test('trailing Lighthouse instructions after the transfer are set aside and the control passes', () => {
+  const result = verifyPayment(fixture('trailing-lighthouse'), expected);
+  assert.equal(result.ok, true);
+  assert.equal(result.recipientAta, 'FLmrXmPivZ5HjAGBkhS9jHdkkq6qw18nfy3ez4mHVkj3');
+});
+
+test('a Memo instruction after the transfer still fails, and only Lighthouse instructions count as trailing', () => {
+  const withMemo = fixture('trailing-lighthouse');
+  withMemo.transaction.message.instructions.push({ program: 'spl-memo', programId: 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr', parsed: 'thanks' });
+  assert.deepEqual(verifyPayment(withMemo, expected), { ok: false, reason: 'last instruction is not a token instruction' });
+  const onlyLighthouse = fixture('trailing-lighthouse');
+  onlyLighthouse.transaction.message.instructions = onlyLighthouse.transaction.message.instructions.slice(2);
+  assert.deepEqual(verifyPayment(onlyLighthouse, expected), { ok: false, reason: 'no instructions' });
+});

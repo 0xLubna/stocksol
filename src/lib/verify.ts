@@ -5,6 +5,7 @@
 import { PublicKey } from '@solana/web3.js';
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { USDC } from '../registry';
+import { LIGHTHOUSE_PROGRAM_ID } from './lighthouse';
 
 export type VerifyExpectation = {
   recipient: PublicKey;
@@ -44,7 +45,12 @@ export function verifyPayment(tx: unknown, expected: VerifyExpectation): VerifyR
   if (!Array.isArray(instructions) || instructions.length === 0) {
     return { ok: false, reason: 'no instructions' };
   }
-  const last = instructions[instructions.length - 1] as AnyRecord;
+  // Lighthouse assertions a wallet appended after the transfer are set aside; anything else
+  // after the transfer still fails below.
+  let end = instructions.length;
+  while (end > 0 && key((instructions[end - 1] as AnyRecord)?.programId) === LIGHTHOUSE_PROGRAM_ID) end -= 1;
+  if (end === 0) return { ok: false, reason: 'no instructions' };
+  const last = instructions[end - 1] as AnyRecord;
   if (key(last.programId) !== TOKEN_PROGRAM_ID.toBase58()) {
     return { ok: false, reason: 'last instruction is not a token instruction' };
   }

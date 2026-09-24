@@ -2,34 +2,54 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useConnection } from '@solana/wallet-adapter-react';
-import { Keypair, type PublicKey } from '@solana/web3.js';
+import { Keypair, PublicKey } from '@solana/web3.js';
+import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import QRCode from 'qrcode';
 import Providers from '../providers';
+import { USDC } from '../../registry';
+import { matchAmount } from '../../lib/amount-match';
 import {
+  AMOUNT_MAX_PAGES_PER_POLL,
+  AMOUNT_MAX_READS_PER_POLL,
+  AMOUNT_PAGE_LIMIT,
+  applyPage,
+  MANY_TRANSACTIONS_TEXT,
+  nextToVerify,
+  pageRequest,
+  passInProgress,
+  queueIsLong,
+} from '../../lib/amount-watch';
+import {
+  applyAmountOutcome,
   applyOutcome,
-  isCurrent,
   MERCHANT_LOOKUP_LIMIT,
   MISMATCH_TEXT,
   newWatch,
+  pollInterval,
   selectToVerify,
+  skipSet,
+  SLOW_AFTER_MS,
+  SLOW_TEXT,
   storeWatch,
   watchFor,
+  withAmountWatch,
   type StoredWatch,
   type WatchOutcome,
   type WatchState,
 } from '../../lib/merchant-watch';
 import { buildRequestUrl, buildScanLink } from '../../lib/pay-url';
+import { drawUniqueStep, uniqueAmount } from '../../lib/unique-amount';
 import { parseAmountUsdc, parseWalletAddress, ValidationError } from '../../lib/validate';
 
-// Polling as built: the reference every 3 s for 10 minutes, at most 5 verify calls per poll;
-// then the request expires and "Check again" runs one more full round.
-const REFERENCE_POLL_MS = 3000;
-const REFERENCE_LIMIT_MS = 600_000;
-const EXPIRED_TEXT = 'request expired, create a new one';
+// Watching as built: both paths every 3 s for 10 minutes, then every 30 s for as long as the page
+// is open; a transfer request has no deadline, so it is never declared unpaid or expired.
+const UNIQUE_TEXT = 'Includes a few millionths so this payment can be recognised.';
+const NETWORK_BUSY = 'network busy, try again';
 const explorer = (sig: string) => `https://explorer.solana.com/tx/${sig}`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-type Request = { recipient: PublicKey; amountText: string; reference: PublicKey; url: string };
+type Request = { recipient: PublicKey; recipientAta: PublicKey; amountText: string; amountUsdc: bigint; reference: PublicKey; url: string; createdAt: number };
+type Paid = { signature: string; foundBy: 'reference' | 'amount' };
 
 function MerchantPage() {
   const { connection } = useConnection();
@@ -40,32 +60,47 @@ function MerchantPage() {
   const [scanQr, setScanQr] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string>('');
-  const [paid, setPaid] = useState<string | null>(null);
-  const [expired, setExpired] = useState(false);
-  const [checking, setChecking] = useState(false);
+  const [paid, setPaid] = useState<Paid | null>(null);
+  const [creating, setCreating] = useState(false);
   // The watch state belongs to one reference; a round for an older request reads and writes nothing.
   const watch = useRef<StoredWatch | null>(null);
 
   const create = async () => {
+    if (creating) return;
+    setCreating(true);
     setError(null);
     setPaid(null);
-    setExpired(false);
     setQr(null);
     setScanQr(null);
+    setRequest(null);
     try {
       const recipient = parseWalletAddress(addressText.trim(), 'recipient');
-      const text = amountText.trim();
-      parseAmountUsdc(text);
+      // The entered amount plus 1 to 999 millionths, under the same rules and cap as /api/pay.
+      const text = uniqueAmount(amountText.trim(), drawUniqueStep());
+      const amountUsdc = parseAmountUsdc(text);
+      const recipientAta = getAssociatedTokenAddressSync(new PublicKey(USDC.mint), recipient, false, TOKEN_PROGRAM_ID);
+      // The boundary: the newest signature on the recipient's USDC account right now; the amount
+      // path looks at nothing older. Without it there is no request.
+      let boundary: string | null;
+      try {
+        const newest = await connection.getSignaturesForAddress(recipientAta, { limit: 1 }, 'confirmed');
+        boundary = newest.length > 0 ? newest[0].signature : null;
+      } catch {
+        setError(NETWORK_BUSY);
+        return;
+      }
       // A fresh reference per request; it is never reused once a payment is found.
       const reference = Keypair.generate().publicKey;
-      watch.current = newWatch(reference.toBase58());
+      watch.current = newWatch(reference.toBase58(), boundary);
       const href = buildRequestUrl(recipient, text, reference);
-      setRequest({ recipient, amountText: text, reference, url: href });
+      setRequest({ recipient, recipientAta, amountText: text, amountUsdc, reference, url: href, createdAt: Date.now() });
       setQr(await QRCode.toDataURL(href, { width: 320, margin: 1 }));
       setScanQr(await QRCode.toDataURL(buildScanLink(window.location.origin, href), { width: 320, margin: 1 }));
       setStatus('waiting for payment');
     } catch (e) {
       setError(e instanceof ValidationError ? e.reason : 'could not create the request');
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -85,43 +120,78 @@ function MerchantPage() {
     }
   };
 
-  // One lookup-and-verify round: signatures for the reference (errors skipped), the newest
-  // unrejected ones verified, at most 5 per round. A lookup that throws changes nothing.
+  // One round of both paths. Reference path: signatures for the reference (errors skipped), the
+  // newest unrejected ones verified, at most 5. Amount path: every signature on the recipient's
+  // USDC account since the boundary collected page by page (at most 5 pages a round, the position
+  // carried over), then at most 5 read and matched oldest first. Nothing is skipped; a read that
+  // fails is retried next round.
   const pollOnce = async (r: Request): Promise<WatchState> => {
     const reference = r.reference.toBase58();
     let state = watchFor(watch.current, reference);
-    let entries;
-    try {
-      entries = await connection.getSignaturesForAddress(r.reference, { limit: MERCHANT_LOOKUP_LIMIT }, 'confirmed');
-    } catch {
-      return state;
-    }
-    for (const signature of selectToVerify(entries, state.rejected)) {
-      state = applyOutcome(state, signature, await verifyOnce(signature, r));
+    const commit = () => {
       watch.current = storeWatch(watch.current, reference, state);
-      if (state.paid) break;
+    };
+
+    try {
+      const entries = await connection.getSignaturesForAddress(r.reference, { limit: MERCHANT_LOOKUP_LIMIT }, 'confirmed');
+      for (const signature of selectToVerify(entries, skipSet(state))) {
+        state = applyOutcome(state, signature, await verifyOnce(signature, r));
+        commit();
+        if (state.paid) return state;
+      }
+    } catch {
+      // the reference lookup is retried next round
+    }
+
+    try {
+      let pages = 0;
+      do {
+        const req = pageRequest(state.amount);
+        const page = await connection.getSignaturesForAddress(
+          r.recipientAta,
+          { limit: AMOUNT_PAGE_LIMIT, until: req.until ?? undefined, before: req.before ?? undefined },
+          'confirmed',
+        );
+        state = withAmountWatch(state, applyPage(state.amount, page, skipSet(state)));
+        commit();
+        pages += 1;
+      } while (passInProgress(state.amount) && pages < AMOUNT_MAX_PAGES_PER_POLL);
+    } catch {
+      // the collection pass carries on from its position next round
+    }
+
+    for (const signature of nextToVerify(state.amount, AMOUNT_MAX_READS_PER_POLL)) {
+      let outcome: 'paid' | 'nomatch' | 'error';
+      try {
+        const tx = await connection.getParsedTransaction(signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
+        if (!tx) outcome = 'error';
+        else outcome = matchAmount(tx, { recipient: r.recipient.toBase58(), recipientAta: r.recipientAta.toBase58(), usdcMint: USDC.mint, amountUsdc: r.amountUsdc }).ok ? 'paid' : 'nomatch';
+      } catch {
+        outcome = 'error';
+      }
+      state = applyAmountOutcome(state, signature, outcome);
+      commit();
+      if (state.paid) return state;
     }
     return state;
   };
 
   useEffect(() => {
-    if (!request || paid || expired) return;
+    if (!request || paid) return;
     let cancelled = false;
     (async () => {
-      const deadline = Date.now() + REFERENCE_LIMIT_MS;
-      while (!cancelled && Date.now() < deadline) {
+      for (;;) {
         const state = await pollOnce(request);
         if (cancelled) return;
-        if (state.paid) {
-          setPaid(state.paid);
+        if (state.paid && state.foundBy) {
+          setPaid({ signature: state.paid, foundBy: state.foundBy });
           return;
         }
-        if (state.mismatch) setStatus(MISMATCH_TEXT);
-        await sleep(REFERENCE_POLL_MS);
-      }
-      if (!cancelled) {
-        setExpired(true);
-        setStatus(EXPIRED_TEXT);
+        const elapsed = Date.now() - request.createdAt;
+        if (elapsed >= SLOW_AFTER_MS) setStatus(SLOW_TEXT);
+        else if (queueIsLong(state.amount)) setStatus(MANY_TRANSACTIONS_TEXT);
+        else if (state.mismatch) setStatus(MISMATCH_TEXT);
+        await sleep(pollInterval(elapsed));
       }
     })();
     return () => {
@@ -129,20 +199,7 @@ function MerchantPage() {
     };
     // pollOnce reads the request and the watch ref; the request is the dependency that matters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connection, request, paid, expired]);
-
-  // After expiry: one more full round; stays expired if nothing passes. A pass counts only if this
-  // request is still the one on screen when the round returns.
-  const checkAgain = async () => {
-    if (!request || checking) return;
-    setChecking(true);
-    try {
-      const state = await pollOnce(request);
-      if (state.paid && isCurrent(watch.current, request.reference.toBase58())) setPaid(state.paid);
-    } finally {
-      setChecking(false);
-    }
-  };
+  }, [connection, request, paid]);
 
   return (
     <main style={{ maxWidth: 640, margin: '2rem auto', padding: '0 1rem', fontFamily: 'system-ui, sans-serif' }}>
@@ -157,11 +214,16 @@ function MerchantPage() {
         <input value={amountText} onChange={(e) => setAmountText(e.target.value)} placeholder="1.50" style={{ width: '100%' }} />
       </label>
       <div style={{ marginTop: '1rem' }}>
-        <button onClick={create}>Create request</button>
+        <button onClick={create} disabled={creating}>
+          Create request
+        </button>
       </div>
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
       {request && (
         <section style={{ marginTop: '1rem' }}>
+          <p>
+            Amount to pay: {request.amountText} USDC. {UNIQUE_TEXT}
+          </p>
           {qr && <img src={qr} alt="Solana Pay QR" width={320} height={320} />}
           <p style={{ wordBreak: 'break-all', fontSize: 12 }}>{request.url}</p>
           <p>Reference: {request.reference.toBase58()}</p>
@@ -174,19 +236,13 @@ function MerchantPage() {
           {paid ? (
             <p style={{ color: 'green' }}>
               Paid{' '}
-              <a href={explorer(paid)} target="_blank" rel="noreferrer">
-                {paid}
-              </a>
+              <a href={explorer(paid.signature)} target="_blank" rel="noreferrer">
+                {paid.signature}
+              </a>{' '}
+              ({paid.foundBy === 'reference' ? 'found by reference' : 'found by amount'})
             </p>
           ) : (
-            <>
-              <p style={{ color: expired ? 'crimson' : undefined }}>{status}</p>
-              {expired && (
-                <button onClick={checkAgain} disabled={checking}>
-                  Check again
-                </button>
-              )}
-            </>
+            <p>{status}</p>
           )}
         </section>
       )}

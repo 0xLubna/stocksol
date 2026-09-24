@@ -153,6 +153,19 @@ test('a split payment transaction whose account create names another owner', () 
   assert.deepEqual(run([swapTx, payTx]), { ok: false, reason: 'transaction 1 instruction 2: account create is not the recipient USDC account' });
 });
 
+test('trailing Lighthouse instructions refuse in the pre-sign check and pass only with the post-sign option', () => {
+  const lighthouse = new web3.TransactionInstruction({
+    programId: new web3.PublicKey('L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95'),
+    keys: [{ pubkey: payer, isSigner: false, isWritable: false }],
+    data: Buffer.from([5, 0, 1]),
+  });
+  const tx = compile([...budget(), payerAtaCreate(), swapIx(), payeeAtaCreate(), transferIx(), lighthouse]);
+  assert.deepEqual(run([tx]), { ok: false, reason: 'last instruction is not a Token program instruction' });
+  assert.deepEqual(checkPayment({ transactions: [tx], lookupTables: [], ...expected }, { allowTrailingLighthouse: true }), { ok: true });
+  const before = compile([...budget(), payerAtaCreate(), lighthouse, swapIx(), payeeAtaCreate(), transferIx()]);
+  assert.deepEqual(checkPayment({ transactions: [before], lookupTables: [], ...expected }, { allowTrailingLighthouse: true }), { ok: false, reason: 'transaction 0 instruction 3: program not allowed' });
+});
+
 test('a split payment transaction with two account creates', () => {
   const swapTx = compile([...budget(), payerAtaCreate(), swapIx()]);
   const payTx = compile([...budget(), payeeAtaCreate(), payeeAtaCreate(), transferIx()]);
