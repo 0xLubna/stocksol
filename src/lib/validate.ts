@@ -21,13 +21,14 @@ export function parseWalletAddress(value: unknown, field: string): PublicKey {
   return key;
 }
 
-/** Any base58 32-byte key; the Solana Pay reference need not be on the curve. */
-// Length caps run before any decoding: a 32-byte key is at most 44 base58 characters, a 64-byte
-// signature at most 88, and a valid amount (8 whole digits, a point, 6 decimals) at most 16.
+// Length caps run before any decoding: a 32-byte key is at most 44 base58 characters and a
+// 64-byte signature at most 88. Under the 25 USDC cap a valid amount is at most 9 characters
+// ("24.999999"); 16 is headroom.
 const MAX_PUBLIC_KEY_CHARS = 44;
 const MAX_SIGNATURE_CHARS = 88;
 const MAX_AMOUNT_CHARS = 16;
 
+/** Any base58 32-byte key; the Solana Pay reference need not be on the curve. */
 export function parseReference(value: unknown, field: string): PublicKey {
   if (typeof value !== 'string' || value.length === 0) throw new ValidationError(`${field} missing`);
   if (value.length > MAX_PUBLIC_KEY_CHARS) throw new ValidationError(`${field} is not a valid public key`);

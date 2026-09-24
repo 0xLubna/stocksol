@@ -1,10 +1,21 @@
-// Builds the payment transaction(s) for a payer: validates every input, quotes and sizes the
-// stock sale, assembles and simulates, and returns unsigned transactions for the wallet to sign.
+// Builds the payment transaction(s) for a payer: validates every input, checks the payer can cover
+// SOL fees and rent, quotes and sizes the stock sale, assembles and simulates, and returns
+// unsigned transactions for the wallet to sign.
 
-import { Connection } from '@solana/web3.js';
+import { Connection, PublicKey } from '@solana/web3.js';
+import { ACCOUNT_SIZE, getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { findHolding, isPayableHoldingMint, USDC } from '../../../registry';
 import { buildSwapCovering, JupiterError, searchToken } from '../../../lib/jupiter';
 import { assemble, AssembleError } from '../../../lib/assemble';
+import {
+  lamportShortfall,
+  lamportsRequired,
+  payerOutflow,
+  SIGNATURE_FEE_LAMPORTS,
+  solShortageReason,
+  transactionCost,
+  transactionFee,
+} from '../../../lib/sol-budget';
 import {
   parseAmountUsdc,
   parseReference,
@@ -37,6 +48,20 @@ export async function POST(req: Request): Promise<Response> {
   if (!rpcUrl) return plain(500, 'rpc not configured');
   const holding = findHolding(input.inMint);
   if (!holding) return plain(400, 'inMint is not a payable holding');
+  const connection = new Connection(rpcUrl, 'confirmed');
+
+  // SOL before anything upstream: one signature fee plus the rent-exempt reserve for the wallet.
+  let balance: bigint;
+  let reserve: bigint;
+  try {
+    balance = BigInt(await connection.getBalance(input.payer));
+    reserve = BigInt(await connection.getMinimumBalanceForRentExemption(0));
+  } catch {
+    return plain(502, 'rpc unavailable');
+  }
+  if (balance < SIGNATURE_FEE_LAMPORTS + reserve) {
+    return plain(400, solShortageReason(SIGNATURE_FEE_LAMPORTS + reserve, balance));
+  }
 
   try {
     const hit = await searchToken(input.inMint);
@@ -49,14 +74,54 @@ export async function POST(req: Request): Promise<Response> {
     const sizing = await buildSwapCovering(input.inMint, USDC.mint, input.amountUsdc, input.payer.toBase58(), indicativeIn);
     const swap = sizing.sized;
 
-    const connection = new Connection(rpcUrl, 'confirmed');
-    const built = await assemble(connection, {
-      payer: input.payer,
-      recipient: input.recipient,
-      amountUsdc: input.amountUsdc,
-      reference: input.reference,
-      swap,
+    let built;
+    try {
+      built = await assemble(connection, {
+        payer: input.payer,
+        recipient: input.recipient,
+        amountUsdc: input.amountUsdc,
+        reference: input.reference,
+        swap,
+      });
+    } catch (e) {
+      // A simulation that failed for lack of lamports is a SOL shortage, read from the log line only.
+      const shortfall = e instanceof AssembleError ? lamportShortfall(e.logs) : null;
+      if (shortfall !== null) return plain(400, solShortageReason(balance + shortfall + reserve, balance));
+      throw e;
+    }
+
+    // What the whole payment needs: fees per transaction, what the swap-carrying transaction
+    // moves out of the payer (second simulation returning the payer account), the payee's USDC
+    // account rent on the two-transaction path when it does not exist yet, and the reserve.
+    const costs = built.transactions.map(transactionCost);
+    const swapTx = built.transactions[0];
+    const sim = await connection.simulateTransaction(swapTx, {
+      sigVerify: false,
+      replaceRecentBlockhash: true,
+      accounts: { encoding: 'base64', addresses: [input.payer.toBase58()] },
     });
+    const post = sim.value.accounts?.[0]?.lamports;
+    if (sim.value.err !== null || typeof post !== 'number') {
+      const shortfall = lamportShortfall(sim.value.logs);
+      if (shortfall !== null) return plain(400, solShortageReason(balance + shortfall + reserve, balance));
+      return plain(502, 'swap unavailable');
+    }
+    const swapOutflowLamports = payerOutflow(balance, BigInt(post), transactionFee(costs[0]));
+    let payeeAccountMissing = false;
+    let payeeAccountRentLamports = BigInt(0);
+    if (!built.single) {
+      const payeeAta = getAssociatedTokenAddressSync(new PublicKey(USDC.mint), input.recipient, false, TOKEN_PROGRAM_ID);
+      payeeAccountMissing = (await connection.getAccountInfo(payeeAta)) === null;
+      payeeAccountRentLamports = BigInt(await connection.getMinimumBalanceForRentExemption(ACCOUNT_SIZE));
+    }
+    const budget = lamportsRequired({
+      transactions: costs,
+      swapOutflowLamports,
+      payeeAccountMissing,
+      payeeAccountRentLamports,
+      reserveLamports: reserve,
+    });
+    if (balance < budget.total) return plain(400, solShortageReason(budget.total, balance));
 
     return Response.json({
       transactions: built.transactions.map((tx) => Buffer.from(tx.serialize()).toString('base64')),
@@ -66,6 +131,14 @@ export async function POST(req: Request): Promise<Response> {
       inAmount: swap.inAmount.toString(),
       outAmount: swap.outAmount.toString(),
       otherAmountThreshold: swap.otherAmountThreshold.toString(),
+      lamportsRequired: budget.total.toString(),
+      lamportsBreakdown: {
+        fees: budget.fees.toString(),
+        swapOutflow: budget.swapOutflow.toString(),
+        payeeAccountRent: budget.payeeAccountRent.toString(),
+        reserve: budget.reserve.toString(),
+      },
+      payerLamports: balance.toString(),
     });
   } catch (e) {
     if (e instanceof JupiterError && e.status === 429) return plain(503, 'busy, try again');
