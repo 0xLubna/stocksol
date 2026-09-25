@@ -38,7 +38,7 @@ import {
   type WatchState,
 } from '../../lib/merchant-watch';
 import { buildRequestUrl, buildScanLink } from '../../lib/pay-url';
-import { PAY_ENABLED } from '../../lib/site';
+import { PAY_ENABLED, REPO_URL } from '../../lib/site';
 import { drawUniqueStep, uniqueAmount } from '../../lib/unique-amount';
 import { parseAmountUsdc, parseWalletAddress, ValidationError } from '../../lib/validate';
 
@@ -262,7 +262,24 @@ function MerchantPage() {
   );
 }
 
+// Shown while payment requests are switched off: no form, no QR, nothing read from chain.
+function MerchantDisabled() {
+  return (
+    <main style={{ maxWidth: 640, margin: '2rem auto', padding: '0 1rem', fontFamily: 'system-ui, sans-serif' }}>
+      <h1>Merchant</h1>
+      <p>
+        Payment requests are switched off on this public demo. The payment log in the{' '}
+        <a href={REPO_URL} target="_blank" rel="noreferrer" style={{ textDecoration: 'underline' }}>
+          README
+        </a>{' '}
+        links real mainnet payments we made.
+      </p>
+    </main>
+  );
+}
+
 export default function Page() {
+  if (!PAY_ENABLED) return <MerchantDisabled />;
   return (
     <Providers>
       <MerchantPage />
