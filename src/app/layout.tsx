@@ -4,7 +4,7 @@ import { REPO_URL } from "../lib/site";
 
 export const metadata: Metadata = {
   title: "StockPay",
-  description: "Pay a Solana Pay request from tokenized stocks and get paid in USDC. An open-source hackathon prototype.",
+  description: "Pay a Solana Pay request from tokenized stocks (SPYx, NVDAx, TSLAx) and get paid in USDC. An open-source hackathon prototype.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
