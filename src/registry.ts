@@ -17,9 +17,11 @@ export type RegistryEntry = {
   sourceDate: string;
 };
 
-// decimals and tokenProgram for every entry below come from the Jupiter Tokens API search of
+// decimals and tokenProgram for USDC and SPYx come from the Jupiter Tokens API search of
 // 19 Sep 2026: one GET https://api.jup.ag/tokens/v2/search.
 // The same day each mint account was read with getMultipleAccounts and agreed on owner and decimals.
+// NVDAx and TSLAx: the same search on 25 Sep 2026, agreed the same day with a getAccountInfo read
+// of each mint on owner program and decimals.
 
 /** The payment mint. Not a holding: it is what holdings are sold for, never sold itself. */
 export const USDC: RegistryEntry = {
@@ -42,12 +44,30 @@ export const HOLDINGS: RegistryEntry[] = [
     sourceUrl: 'https://api.jup.ag/tokens/v2/search?query=SPYx',
     sourceDate: '19 Sep 2026',
   },
+  {
+    symbol: 'NVDAx',
+    mint: 'Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh',
+    decimals: 8,
+    tokenProgram: TOKEN_2022_PROGRAM,
+    issuer: 'xStocks',
+    sourceUrl: 'https://api.jup.ag/tokens/v2/search?query=NVDAx',
+    sourceDate: '25 Sep 2026',
+  },
+  {
+    symbol: 'TSLAx',
+    mint: 'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB',
+    decimals: 8,
+    tokenProgram: TOKEN_2022_PROGRAM,
+    issuer: 'xStocks',
+    sourceUrl: 'https://api.jup.ag/tokens/v2/search?query=TSLAx',
+    sourceDate: '25 Sep 2026',
+  },
 ];
 
 /**
  * Symbols the pay screen offers.
  */
-const OFFERED_SYMBOLS = ['SPYx'];
+const OFFERED_SYMBOLS = ['SPYx', 'NVDAx', 'TSLAx'];
 
 /** The only list the pay screen may offer, and the only mints /api/pay may accept as input. */
 export function payableHoldings(): RegistryEntry[] {
