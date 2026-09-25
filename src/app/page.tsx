@@ -9,19 +9,25 @@ const INK = '#1a1a1a';
 const STAMP = '#5b6b8c';
 
 const page: CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  alignItems: 'flex-start',
-  gap: '3rem',
-  maxWidth: '64rem',
-  margin: '0 auto',
-  padding: '2rem 1rem',
+  maxWidth: 640,
+  margin: '2rem auto',
+  padding: '0 1rem',
+  minHeight: 'calc(100vh - 12rem)',
   fontFamily: 'system-ui, sans-serif',
+};
+
+const button: CSSProperties = {
+  display: 'inline-block',
+  padding: '0.75rem 1em',
+  border: '1px solid currentColor',
+  textDecoration: 'none',
+  fontWeight: 600,
 };
 
 const receipt: CSSProperties = {
   width: '100%',
   maxWidth: '24rem',
+  margin: '2.5rem 0 0',
   fontFamily: MONO,
   fontSize: '0.9rem',
   lineHeight: 1.6,
@@ -45,22 +51,19 @@ function Row({ label, value, bold }: { label: string; value: string; bold?: bool
 export default function Home() {
   return (
     <main style={page}>
-      <div style={{ flex: '1 1 20rem' }}>
-        <h1 aria-label="StockPay" style={{ fontSize: 'clamp(3rem, 12vw, 6.5rem)', lineHeight: 1, letterSpacing: '-0.03em', margin: '0 0 1rem' }}>
+      <div>
+        <h1 aria-label="StockPay" style={{ fontSize: 'clamp(2.5rem, 10vw, 5rem)', lineHeight: 1, letterSpacing: '-0.03em', margin: '0 0 1rem' }}>
           Stock<span style={{ color: '#8b93a7' }}>Pay</span>
         </h1>
         <p style={{ fontSize: '1.25rem' }}>Pay from tokenized stocks. Get paid in USDC.</p>
         <p style={{ fontFamily: MONO }}>SPYx · NVDAx · TSLAx (xStocks)</p>
-        <p>
-          <a
-            href={REPO_URL}
-            target="_blank"
-            rel="noreferrer"
-            style={{ display: 'inline-block', padding: '0.75rem 1em', border: '1px solid currentColor', textDecoration: 'none', fontWeight: 600 }}
-          >
+        <p style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <a href={REPO_URL} target="_blank" rel="noreferrer" style={button}>
             README
-          </a>{' '}
-          How it works, and the payment log
+          </a>
+          <a href={`${REPO_URL}#payment-log`} target="_blank" rel="noreferrer" style={button}>
+            Log
+          </a>
         </p>
       </div>
 
